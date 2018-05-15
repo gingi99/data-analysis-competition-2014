@@ -1,0 +1,492 @@
+---
+title: "report140928"
+author: "ooki"
+date: "2014/10/13"
+output: html_document
+---
+
+# 1. ライブラリ読み込み
+```{r, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(knitr)
+library(pipeR)
+```
+
+---
+
+# 2. データ読み込み
+```{r}
+fsp <- readRDS("/data/fsp2.RDS")
+receipt <- readRDS("/data/receipt2.RDS")
+store <- read.csv("/data/store.csv")
+
+# ひとまずサンプルとして抽出してみる
+fsp.sample <- fsp
+receipt.sample <- receipt
+```
+
+---
+
+# 3. 前処理
+### Policy
+#### 1. 汎用的なものはclensing.Rの時点で実施していく（型変換，列名変更，列追加）
+#### 2. 個別に必要なもの（これは作業やっていけばなんとなく出てくる）
+```{r, warning=FALSE}
+store %.%
+  mutate(storeAttr=paste(area,floorSpace,sales, sep="_")) -> store
+```
+
+---
+
+# 4. 分析
+## 4-1. receiptデータだけで
+### 4-1-1. 日付と商品の売上の関係
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 結果：やたら変動があるのが気になる
+datebreaks <- seq(as.Date("2013-7-1"), as.Date("2014-6-30"), by="1 month")
+receipt.sample %.%
+  select(システム年月日,販売売上_税抜) %.%
+  group_by(システム年月日) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=システム年月日, y=sum_uri)) + 
+   geom_line() + scale_x_date(breaks=datebreaks) + 
+   theme(axis.text.x = element_text(angle = 30, hjust = 1)) + 
+   labs(title="日別の売上推移")
+
+## POS大分類の販売売上ランキング
+## 結果：青果，酒類，一般食品が飛び出てる。惣菜，精肉，加工食品，鮮魚，牛乳，たばこ，菓子と続く。
+receipt.sample %.%
+  select(POS大分類名,販売売上_税抜) %.%
+  group_by(POS大分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=reorder(POS大分類名, sum_uri), y=sum_uri)) + 
+   geom_histogram(stat="identity") +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+## POS中分類の販売売上ランキング
+## 結果：野菜，タバコ，酒その他，自家製惣菜，牛乳，果物，日配，飲料，調味料，菓子，惣菜，豚肉，ビールという順番
+receipt.sample %.%
+  select(POS大分類名,POS中分類名,販売売上_税抜) %.%
+  group_by(POS大分類名,POS中分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=reorder(POS中分類名, sum_uri), y=sum_uri, fill=POS大分類名)) + 
+   geom_histogram(stat="identity") +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+## 日別の販売売上の推移（POS大分類別）結果：わかりづらいな…
+datebreaks <- seq(as.Date("2013-7-1"), as.Date("2014-6-30"), by="1 month")
+receipt.sample %.%
+  select(システム年月日,POS大分類名, 販売売上_税抜) %.%
+  group_by(システム年月日, POS大分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=システム年月日, y=sum_uri, group=POS大分類名, color=POS大分類名)) + 
+  geom_line() + scale_x_date(breaks=datebreaks) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) + 
+  labs(title="日別の売上推移（POS大分類別）")
+
+## 月別の販売売上の棒グラフ（POS大分類別）結果：なんかよくわからんな
+receipt.sample %.%
+  select(month,POS大分類名, 販売売上_税抜) %.%
+  group_by(month, POS大分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=POS大分類名, y=sum_uri, fill=POS大分類名)) + 
+  geom_histogram(stat="identity") + facet_grid(month~.)
+
+## 月別の販売売上の推移（POS大分類別）
+## 結果：大きく３グループくらいに分けれそう。化粧品とその他はほぼ0。一般食品・酒・青果強い。
+receipt.sample %.%
+  select(month, POS大分類名, 販売売上_税抜) %.%
+  group_by(month, POS大分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=month, y=sum_uri, group=POS大分類名, color=POS大分類名)) + 
+  geom_line()
+
+## 月別の販売売上の推移（POS中分類別）結果：中分類までいくと結構差がある商品がわかる
+receipt.sample %.%
+  select(month, POS大分類名, POS中分類名, 販売売上_税抜) %.%
+  group_by(month, POS大分類名, POS中分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=month, y=sum_uri, group=POS中分類名, color=POS中分類名)) + 
+  geom_line() + facet_grid(.~POS大分類名)
+```
+
+### 4-1-2. 地域と売上の関係
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 北海道と東京別のPOS大分類の売上の違い
+## 結果：北海道は酒類，青果，一般食品が大きいが，東京は一般食品，惣菜，青果が大きい
+receipt.sample %.%
+  select(店舗, POS大分類名, 販売売上_税抜) %.%
+  inner_join(store, by="店舗") %.%
+  group_by(area, POS大分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=POS大分類名, y=sum_uri, fill=area)) + 
+  geom_histogram(stat="identity", position="dodge") 
+
+## 北海道と東京別の月別のPOS大分類の売上割合の違い
+## 結果：わかりづらいけど，area間で違うな…。
+receipt.sample %.%
+  select(month, 店舗, POS大分類名, 販売売上_税抜) %.%
+  inner_join(store, by="店舗") %.%
+  group_by(month, area, POS大分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=month, y=sum_uri, fill=POS大分類名)) + 
+  geom_histogram(stat="identity", position="fill") + facet_grid(.~area)
+
+## 月別の店舗別売上推移
+## 結果：北海道の店舗が大体の売上。
+receipt.sample %.%
+  select(month, 店舗, 販売売上_税抜) %.%
+  group_by(month, 店舗) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  inner_join(store, by="店舗") %.%
+  mutate(storeAttr=paste(area,floorSpace,sales, sep="_"))　%.%
+  ggplot(aes(x=month, y=sum_uri, group=店舗, color=storeAttr)) + 
+  geom_line()
+```
+
+### 4-1-3. 人（レシート）と売上の関係
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 会員と非会員の割合 
+## 結果：大体75％くらいが会員
+receipt.sample %.%
+  select(顧客CD, reID) %.%
+  unique() %.%
+  mutate(label=ifelse(顧客CD=="non-member", "non-member", "member")) %.%
+  group_by(label) %.%
+  summarise(count=n()) %.%
+  ggplot(aes(x="", y=count, fill=label)) + geom_bar(stat="identity", width=1) + coord_polar("y")
+
+## レシートの金額の割合（結構重いので省略）
+## 
+#receipt.sample %.%
+#  select(reID, 販売売上_税抜) %.%
+#  group_by(reID) %.%
+#  summarise(sum_uriage=sum(販売売上_税抜)) %.%
+#  arrange(sum_uriage) %.%
+#  filter(sum_uriage > 0) %.%
+#  ggplot(aes(x=reorder(reID, sum_uriage), y=sum_uriage)) + geom_histogram(stat="identity")
+
+## よく買う人ランキング（結構重いので省略）
+#receipt.sample %.%
+#  select(顧客CD, 販売売上_税抜) %.%
+#  group_by(顧客CD) %.%
+#  summarise(sum_uri=sum(販売売上_税抜)) %.%
+#  arrange(desc(sum_uri)) %.%
+#  filter(sum_uri>=0) -> aaa
+#ggplot(aaa[-1,], aes(x=reorder(顧客CD,sum_uri), y=sum_uri)) + 
+#  geom_histogram(stat="identity", binwidth=.1) + 
+#  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+### 4-1-4. FSP利用フラグ
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## FSP利用フラグの割合(全レコードに対する)
+## 結果：10％くらい
+receipt.sample %.%
+  select(FSP利用フラグ) %.%
+  group_by(FSP利用フラグ) %.%
+  summarise(count=n()) %.%
+  ggplot(aes(x="", y=count, fill=as.character(FSP利用フラグ))) + geom_bar(stat="identity", width=1) + coord_polar("y")
+
+## FSP利用フラグの割合(レシートに対する)
+## 1レシートで25％くらいが1個のFSPを利用してる。2個以上は2％くらい。
+receipt.sample %.%
+  select(FSP利用フラグ, reID) %.%
+  group_by(reID) %.%
+  summarise(sum_fsp=sum(FSP利用フラグ)) %.%
+  group_by(sum_fsp) %.%
+  summarise(count=n()) %.%
+  ggplot(aes(x="", y=count, fill=as.character(sum_fsp))) + geom_bar(stat="identity", width=1) + coord_polar("y")
+
+## FSP利用して何を買ってるのか
+## 結果：牛乳，日配，加工肉，飲料，調味料と続く。普通の販売売上とは違うのか！
+receipt.sample %.%
+  filter(FSP利用フラグ==1) %.%
+  select(POS大分類名, POS中分類名, 販売売上_税抜) %.%
+  group_by(POS大分類名, POS中分類名) %.%
+  summarise(sum_uri=sum(販売売上_税抜)) %.%
+  ggplot(aes(x=reorder(POS中分類名, sum_uri), y=sum_uri, fill=POS大分類名)) + 
+   geom_histogram(stat="identity") +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### 4-1-5. 顧客の年間の来店回数
+```{r}
+## 顧客の年間の来店回数
+## 結果：medianが3回だと…。
+receipt.sample %.%
+  select(システム年月日,顧客CD, reID) %.%
+  filter(顧客CD != "non-member") %.%
+  unique() %.%
+  group_by(顧客CD) %.%
+  dplyr::summarise(count=n()) %.%
+  arrange(desc(count)) -> aaa
+summary(aaa)
+#ggplot(aaa, aes(reorder(顧客CD,count), count)) + geom_histogram(stat="identity")
+```
+
+## 4-2. fspデータだけで
+### 4-2-1. 売価差
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 購入FLGと売価差に関係あるのか（POS中分類にて）
+## 結果：タマゴは売価差が多い方が買ってるっぽいが，全体で見るとあんまり差はない
+fsp.sample %.%
+  select(POS中分類名, 購入FLG, 売価差) %.%
+  ggplot(aes(x=POS中分類名, y=売価差, fill=POS中分類名)) + geom_boxplot() + facet_grid(購入FLG~.)
+
+## 権利適用FLGと売価差に関係あるのか（POS中分類にて）
+## 結果：やっぱタマゴくらいか…
+fsp.sample %.%
+  select(POS中分類名, 権利適用FLG, 売価差) %.%
+  ggplot(aes(x=POS中分類名, y=売価差, fill=POS中分類名)) + geom_boxplot() + facet_grid(権利適用FLG~.)
+
+## 購入FLGと売価差に関係あるのか（店舗にて）
+## 結果：数値で見ないとわかりにくいかな…。
+fsp.sample %.%
+  select(店舗, 購入FLG, 売価差) %.%
+  ggplot(aes(x=店舗, y=売価差, fill=店舗)) + geom_boxplot() + facet_grid(購入FLG~.)
+```
+
+### 4-2-2. FLG
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## どのFLG（優先・履歴・関連）が効いてるのかを調査
+## 結果：優先が多いけど，あまり効いていない。履歴の効果は比較的ありそう。関連が低いってことはレコメンドがあまり効いていないっていうこと。
+fsp.sample %.%
+  select(FLG, 権利適用FLG) %.%
+  group_by(FLG, 権利適用FLG) %.%
+  summarise(count=n()) %.%
+  ggplot(aes(x=FLG, y=count, fill=FLG)) + geom_histogram(stat="identity") + 
+  facet_grid(.~権利適用FLG) + geom_text(aes(label=count), vjust=-1)
+
+## FLG別で買われる商品が違うのか
+## 結果：日配がやや買ってるかな
+fsp.sample %.%
+  select(POS中分類名, FLG, 権利適用FLG) %.%
+  group_by(POS中分類名,FLG, 権利適用FLG) %.%
+  summarise(count=n()) %.%
+  ggplot(aes(x=FLG, y=count, fill=FLG)) + geom_histogram(stat="identity") + 
+  facet_grid(権利適用FLG~POS中分類名) + geom_text(aes(label=count), vjust=-0.5)  
+
+## FLGの関連の精度
+```
+
+### 4-2-3. 権利数
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 権利数をやたら使ってる人がいるか（レコメンドされた数からの正規化はしていない）
+## 結果：medianが1.000, meanが7.052，3rd Quが5.000, MAXが213回。medianが１って…。
+fsp.sample %.%
+  select(顧客CD, 権利適用FLG) %.%
+  group_by(顧客CD) %.%
+  summarise(count=sum(権利適用FLG)) %.%
+  arrange(desc(count)) %.%
+  summary()
+
+## 上記の結果から，ちょい深堀り（c1038054001030000は一番FSP利用してる人）
+# receipt.sample %.%
+#  filter(顧客CD=="c1038054001030000") %.%
+#  arrange(システム年月日) -> bbb
+```
+
+## 4-3. 相関分析
+### 4-3-1. 顧客のFSPの利用頻度と売上の相関
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 相関係数算出
+## 結果：0.804
+receipt %.%
+  select(顧客CD, 販売売上_税抜) %.%
+  filter(顧客CD!="non-member") %.%
+  group_by(顧客CD) %.%
+  dplyr::summarise(sum_uriage=sum(販売売上_税抜)) %.%
+  arrange(desc(sum_uriage)) -> aaa
+fsp %.%
+  select(顧客CD, 権利適用FLG) %.%
+  group_by(顧客CD) %.%
+  dplyr::summarise(sum_fsp=sum(権利適用FLG)) %.%
+  arrange(desc(sum_fsp)) -> bbb
+ccc <- dplyr::inner_join(aaa, bbb)
+cor(ccc$sum_uriage, ccc$sum_fsp)
+## 散布図
+ggplot(ccc, aes(x=sum_fsp, y=sum_uriage)) + geom_point(alpha=0.7, shape=21)
+```
+
+### 4-3-2. 店舗別の顧客のFSPの利用頻度と売上の相関
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 相関係数算出
+## 結果：0.81〜0.87
+receipt %.%
+  select(店舗, 顧客CD, 販売売上_税抜) %.%
+  filter(顧客CD!="non-member") %.%
+  group_by(店舗, 顧客CD) %.%
+  dplyr::summarise(sum_uriage=sum(販売売上_税抜)) %.%
+  arrange(desc(sum_uriage)) -> aaa
+fsp %.%
+  select(店舗, 顧客CD, 権利適用FLG) %.%
+  group_by(店舗, 顧客CD) %.%
+  dplyr::summarise(sum_fsp=sum(権利適用FLG)) %.%
+  arrange(desc(sum_fsp)) -> bbb
+dplyr::inner_join(aaa, bbb) %.%
+  dplyr::inner_join(store) -> ccc
+for(i in unique(ccc$storeAttr)){
+  print(i)
+  tmp <- filter(ccc, storeAttr == i)
+  print(cor(tmp$sum_uriage, tmp$sum_fsp))
+}
+## 散布図
+ggplot(ccc, aes(x=sum_fsp, y=sum_uriage, color=area)) + geom_point(alpha=0.7, shape=21) + facet_grid(.~storeAttr)
+## ヒストグラム（処理が重い）
+# ggplot(ccc, aes(x=reorder(顧客CD,sum_fsp), y=sum_fsp, color=area)) + geom_histogram(stat="identity") + facet_grid(storeAttr~.)
+
+```
+
+
+## 4-4. 顧客クラスタリング
+### 4-4-1. 月々の来店回数推移
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 月々の来店回数データの作成
+receipt %.%
+  filter(顧客CD!="non-member") %.%
+  select(reID,システム年月日,顧客CD) %.%
+  group_by(reID,システム年月日,顧客CD) %.%
+  summarise(flag=1) %.%
+  mutate(month=format(システム年月日,"%Y%m")) %.%
+  select(-システム年月日) %.%
+  group_by(month,顧客CD) %.%
+  summarise(count=sum(flag)) %.%
+  reshape2::dcast(顧客CD~month) -> aaa
+## 可視化（処理が重い）
+## 結果：なんかよくわからんな
+# ggplot(ddd, aes(x=month, y=count, group=顧客CD)) + geom_line()
+
+## NAを0に置換
+bbb <- as.data.frame(apply(aaa, 2 , function(x){replace(x, which(is.na(x)), 0)}))
+bbb[2:13] <- as.data.frame(apply(bbb[2:13], 2 , function(x){as.numeric(x)}))
+
+## 月々の来店回数の平均, 標準偏差, max, median, min, diffの列を追加
+bbb$mean <- apply(bbb[2:13], 1, mean)
+bbb$sd <- apply(bbb[2:13], 1, sd)
+bbb$max <- apply(bbb[2:13], 1, max)
+bbb$med <- apply(bbb[2:13], 1, median)
+bbb$min <- apply(bbb[2:13], 1, min)
+bbb$diff <- bbb$max-bbb$min
+
+## meanとsdの散布図
+ggplot(bbb, aes(mean, sd)) + geom_point(alpha=0.5, shape=21)
+
+## medとsdの散布図
+ggplot(bbb, aes(med, sd)) + geom_point(alpha=0.5, shape=21)
+```
+
+### 4-4-2. 月々の購入金額推移
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 月々の購入金額データの作成
+receipt %.%
+  filter(顧客CD!="non-member") %.%
+  mutate(month=format(システム年月日,"%Y%m")) %.%
+  select(販売売上_税抜,month,顧客CD) %.%
+  group_by(month,顧客CD) %.%
+  dplyr::summarise(sum_uriage=sum(販売売上_税抜)) %.%
+  reshape2::dcast(顧客CD~month) -> aaa
+
+## NAを0に置換
+bbb <- as.data.frame(apply(aaa, 2 , function(x){replace(x, which(is.na(x)), 0)}))
+bbb[2:13] <- as.data.frame(apply(bbb[2:13], 2 , function(x){as.numeric(x)}))
+
+## 月々の購入金額の平均, 標準偏差, max, median, min, diffの列を追加
+bbb$mean <- apply(bbb[2:13], 1, mean)
+bbb$sd <- apply(bbb[2:13], 1, sd)
+bbb$max <- apply(bbb[2:13], 1, max)
+bbb$med <- apply(bbb[2:13], 1, median)
+bbb$min <- apply(bbb[2:13], 1, min)
+bbb$diff <- bbb$max-bbb$min
+
+## meanとsdの散布図
+ggplot(bbb, aes(mean, sd)) + geom_point(alpha=0.5, shape=21)
+
+## medとsdの散布図
+ggplot(bbb, aes(med, sd)) + geom_point(alpha=0.5, shape=21)
+```
+
+### 4-4-3. 月々のfsp利用頻度の推移
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 月々のfsp利用頻度データの作成
+receipt %.%
+  filter(顧客CD!="non-member") %.%
+  mutate(month=format(システム年月日,"%Y%m")) %.%
+　select(FSP利用フラグ,month,顧客CD) %.%
+  group_by(month,顧客CD) %.%
+  dplyr::summarise(sum_uriage=sum(FSP利用フラグ)) %.%
+  reshape2::dcast(顧客CD~month) -> aaa
+
+## NAを0に置換
+bbb <- as.data.frame(apply(aaa, 2 , function(x){replace(x, which(is.na(x)), 0)}))
+bbb[2:13] <- as.data.frame(apply(bbb[2:13], 2 , function(x){as.numeric(x)}))
+
+## 月々の購入金額の平均, 標準偏差, max, median, min, diffの列を追加
+bbb$mean <- apply(bbb[2:13], 1, mean)
+bbb$sd <- apply(bbb[2:13], 1, sd)
+bbb$max <- apply(bbb[2:13], 1, max)
+bbb$med <- apply(bbb[2:13], 1, median)
+bbb$min <- apply(bbb[2:13], 1, min)
+bbb$diff <- bbb$max-bbb$min
+
+## meanとsdの散布図
+ggplot(bbb, aes(mean, sd)) + geom_point(alpha=0.5, shape=21)
+
+## medとsdの散布図
+ggplot(bbb, aes(med, sd)) + geom_point(alpha=0.5, shape=21)
+```
+
+### 4-4-4. 月々の商品購入数の推移
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+## 月々の商品購入数データの作成
+receipt %.%
+  filter(顧客CD!="non-member") %.%
+  mutate(month=format(システム年月日,"%Y%m")) %.%
+　select(month,顧客CD) %.%
+  group_by(month,顧客CD) %.%
+  dplyr::summarise(count=n()) %.%
+  reshape2::dcast(顧客CD~month) -> aaa
+
+## NAを0に置換
+bbb <- as.data.frame(apply(aaa, 2 , function(x){replace(x, which(is.na(x)), 0)}))
+bbb[2:13] <- as.data.frame(apply(bbb[2:13], 2 , function(x){as.numeric(x)}))
+
+## 月々の購入数の平均, 標準偏差, max, median, min, diffの列を追加
+bbb$mean <- apply(bbb[2:13], 1, mean)
+bbb$sd <- apply(bbb[2:13], 1, sd)
+bbb$max <- apply(bbb[2:13], 1, max)
+bbb$med <- apply(bbb[2:13], 1, median)
+bbb$min <- apply(bbb[2:13], 1, min)
+bbb$diff <- bbb$max-bbb$min
+
+## meanとsdの散布図
+ggplot(bbb, aes(mean, sd)) + geom_point(alpha=0.5, shape=21)
+
+## medとsdの散布図
+ggplot(bbb, aes(med, sd)) + geom_point(alpha=0.5, shape=21)
+```
+
+### 4-4-5. 優良顧客の推定
+```{r, warning=FALSE, fig.width=20, fig.height=16}
+# メモ：閾値を何かにして決めるか。または主成分分析系で決める
+```
+
+---
+
+# 5. 今回のまとめ
+## したこと
+#### 4-3.相関分析と4-4.顧客クラスタリングを追加
+#### FSPの利用頻度と売上は相関がある（優良顧客はほどほどにFSPを利用している）
+#### 優良客として，「月々の来店回数の平均 or median」「月々の購入金額の平均 or median」「月々のFSP利用頻度の平均 or median」「月々の商品購入数の平均 or median」の４つの条件で高い客を優良顧客と考えた。
+
+## to do
+#### 優良顧客決定の閾値・手法
+#### 優良顧客決定後の特徴調査
+#### 逆に，離れていく顧客調べは横田くんの分析のほうがうまく活きそうなので，一旦任せる
+#### FSPの種類・FSPの売価差とかの関連調べ
+
+## なんとなくやれそうなこと
+#### 優良顧客にするために・顧客離れていかないために，こんな風に売れ！っていう提案。
